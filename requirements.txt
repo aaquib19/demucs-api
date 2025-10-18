@@ -5,3 +5,5 @@ demucs==4.0.0
 numpy==2.0.0
 gunicorn==22.0.0
 python-dotenv==1.0.0
+librosa==0.10.0
+soundfile==0.12.1

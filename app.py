@@ -7,10 +7,14 @@ import os
 import tempfile
 import io
 import zipfile
-from werkzeug.utils import secure_filename
+import librosa
+import numpy as np
+import traceback
+import soundfile as sf
+
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max 
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max
 
 # Global model variable - lazy load
 model = None
@@ -22,12 +26,13 @@ def load_model():
     if model is None:
         try:
             print("Loading model...")
-            model = get_model('htdemucs')
+            model = get_model('hdemucs_mmi')
             device = 'cpu'  # Force CPU for Render compatibility
             model = model.to(device)
             print(f"Model loaded on {device}")
         except Exception as e:
             print(f"Error loading model: {e}")
+            traceback.print_exc()
             raise
 
 @app.route('/health', methods=['GET'])
@@ -69,15 +74,14 @@ def separate():
                 file.save(tmp.name)
                 temp_input = tmp.name
             
-            # Load audio
+            # Load audio using librosa
             print(f"Loading audio from {temp_input}")
-            waveform, sr = torchaudio.load(temp_input)
+            audio, sr = librosa.load(temp_input, sr=16000, mono=False)
             
-            # Resample if needed
-            if sr != 16000:
-                print(f"Resampling from {sr} to 16000")
-                resampler = torchaudio.transforms.Resample(sr, 16000)
-                waveform = resampler(waveform)
+            # Convert to torch tensor
+            if audio.ndim == 1:
+                audio = np.expand_dims(audio, axis=0)
+            waveform = torch.from_numpy(audio).float()
             
             # Move to device
             waveform = waveform.to(device)
@@ -96,11 +100,21 @@ def separate():
                 for idx, source_name in enumerate(model_sources):
                     if source_name in instruments:
                         # Save to buffer instead of disk
-                        wav_buffer = io.BytesIO()
-                        torchaudio.save(wav_buffer, sources[0, idx:idx+1], 16000, format='wav')
-                        wav_buffer.seek(0)
-                        zip_file.writestr(f'{source_name}.wav', wav_buffer.read())
-                        print(f"Added {source_name}")
+                        audio_np = sources[0, idx:idx+1].cpu().numpy()
+                            # Remove the extra dimension and transpose properly
+                        audio_np = audio_np.squeeze()
+                        if audio_np.ndim == 1:
+                            audio_np = audio_np
+                        else:
+                            audio_np = audio_np.T
+                            
+                        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as wav_tmp:
+                            sf.write(wav_tmp.name, audio_np, 16000)
+                            with open(wav_tmp.name, 'rb') as f:
+                                zip_file.writestr(f'{source_name}.wav', f.read())
+                            os.unlink(wav_tmp.name)
+                            print(f"Added {source_name}")
+                            print(f"Added {source_name}")
             
             zip_buffer.seek(0)
             print("Returning zip file")
@@ -116,30 +130,10 @@ def separate():
                 os.unlink(temp_input)
     
     except Exception as e:
-        print(f"Error: {e}", exc_info=True)
+        print(f"Error: {e}")
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
-```
-
-**Key changes:**
-
-1. **Lazy loading** - Model loads on first request, not at startup (prevents timeout)
-2. **Forced CPU** - `device = 'cpu'` explicitly, avoiding GPU detection issues
-3. **Better error handling** - Added logging and proper cleanup
-4. **In-memory processing** - Avoid multiple disk writes for better performance
-5. **Input validation** - Validate instruments early
-6. **Reduced file size limit** - 50MB is safer for Render's constraints
-7. **Better logging** - Added print statements for debugging
-
-**Also update your requirements.txt to CPU-only:**
-```
-Flask==3.0.0
-torch==2.9.0 --index-url https://download.pytorch.org/whl/cpu
-torchaudio==2.9.0
-demucs==4.0.0
-numpy==2.0.0
-gunicorn==22.0.0
-python-dotenv==1.0.0

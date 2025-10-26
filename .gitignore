@@ -255,7 +255,6 @@ test_audio.*
 ._*
 
 # Documentation
-README.md
 QUICKSTART.md
 
 # Test scripts

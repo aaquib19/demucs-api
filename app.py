@@ -110,28 +110,46 @@ def process_audio(job_id, temp_input, instruments):
     try:
         processing_jobs[job_id]['status'] = 'processing'
         processing_jobs[job_id]['progress'] = 10
+        
+        # Verify file exists and is accessible
+        if not os.path.exists(temp_input):
+            raise FileNotFoundError(f"Temporary file not found: {temp_input}")
+        
+        if not os.path.isfile(temp_input):
+            raise ValueError(f"Path is not a regular file: {temp_input}")
 
-        # Load audio using torchaudio for better compatibility
+        # Load audio using librosa for better format compatibility
         print(f"[{job_id}] Loading audio...")
         use_sr = model_sample_rate if model_sample_rate else AUDIO_SAMPLE_RATE
+        
+        # Use librosa for loading which has better format support
+        try:
+            audio, sr = librosa.load(temp_input, sr=use_sr, mono=False)
+            # Convert to tensor
+            if audio.ndim == 1:
+                audio = audio.reshape(1, -1)  # Mono to (1, samples)
+            else:
+                audio = audio  # Already (channels, samples)
+            waveform = torch.from_numpy(audio).float()
+        except Exception as e:
+            print(f"[{job_id}] Librosa failed, trying torchaudio: {e}")
+            # Fallback to torchaudio
+            waveform, sr = torchaudio.load(temp_input)
+            
+            # Resample if needed
+            if sr != use_sr:
+                print(f"[{job_id}] Resampling from {sr}Hz to {use_sr}Hz...")
+                resampler = torchaudio.transforms.Resample(sr, use_sr)
+                waveform = resampler(waveform)
+                sr = use_sr
 
-        # Load with torchaudio
-        waveform, sr = torchaudio.load(temp_input)
-
-        # Resample if needed
-        if sr != use_sr:
-            print(f"[{job_id}] Resampling from {sr}Hz to {use_sr}Hz...")
-            resampler = torchaudio.transforms.Resample(sr, use_sr)
-            waveform = resampler(waveform)
-            sr = use_sr
+        processing_jobs[job_id]['progress'] = 30
 
         # Move to device (avoid unnecessary CPU->GPU copies)
         if device != 'cpu':
             waveform = waveform.to(device, non_blocking=True)
         else:
             waveform = waveform.to(device)
-
-        processing_jobs[job_id]['progress'] = 30
 
         # Separate with optimizations
         print(f"[{job_id}] Separating audio (device: {device})...")
@@ -172,8 +190,13 @@ def process_audio(job_id, temp_input, instruments):
         processing_jobs[job_id]['status'] = 'failed'
         processing_jobs[job_id]['error'] = str(e)
     finally:
+        # Clean up the temp file
         if os.path.exists(temp_input):
-            os.unlink(temp_input)
+            try:
+                os.unlink(temp_input)
+            except Exception as e:
+                print(f"Error deleting temp file: {e}")
+        
         # Clear GPU cache if using CUDA
         if device == 'cuda':
             torch.cuda.empty_cache()
@@ -208,11 +231,23 @@ def separate():
         if not instruments:
             return jsonify({'error': 'No valid instruments requested'}), 400
 
-        # Save file temporarily with correct extension detection
+        # Create a more reliable temporary file
         file_ext = os.path.splitext(file.filename)[1] or '.mp3'
-        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
-            file.save(tmp.name)
-            temp_input = tmp.name
+        temp_dir = tempfile.mkdtemp()
+        temp_input = os.path.join(temp_dir, f"{uuid.uuid4()}{file_ext}")
+        
+        # Save the file with proper error handling
+        try:
+            file.save(temp_input)
+            # Verify the file was saved correctly
+            if not os.path.exists(temp_input) or os.path.getsize(temp_input) == 0:
+                raise ValueError("Failed to save uploaded file")
+        except Exception as e:
+            # Clean up if save failed
+            if os.path.exists(temp_input):
+                os.unlink(temp_input)
+            os.rmdir(temp_dir)
+            return jsonify({'error': f'Failed to save uploaded file: {str(e)}'}), 500
 
         # Create job
         job_id = str(uuid.uuid4())
@@ -220,7 +255,8 @@ def separate():
             'status': 'queued',
             'progress': 0,
             'created_at': datetime.now().isoformat(),
-            'instruments': instruments
+            'instruments': instruments,
+            'temp_dir': temp_dir  # Store temp dir for cleanup
         }
 
         # Start background thread
@@ -304,11 +340,23 @@ def batch_separate():
         job_ids = []
         for file in files:
             if file and file.filename != '':
-                # Save file temporarily
+                # Create a more reliable temporary file
                 file_ext = os.path.splitext(file.filename)[1] or '.mp3'
-                with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
-                    file.save(tmp.name)
-                    temp_input = tmp.name
+                temp_dir = tempfile.mkdtemp()
+                temp_input = os.path.join(temp_dir, f"{uuid.uuid4()}{file_ext}")
+                
+                # Save the file with proper error handling
+                try:
+                    file.save(temp_input)
+                    # Verify the file was saved correctly
+                    if not os.path.exists(temp_input) or os.path.getsize(temp_input) == 0:
+                        raise ValueError("Failed to save uploaded file")
+                except Exception as e:
+                    # Clean up if save failed
+                    if os.path.exists(temp_input):
+                        os.unlink(temp_input)
+                    os.rmdir(temp_dir)
+                    return jsonify({'error': f'Failed to save uploaded file: {str(e)}'}), 500
 
                 # Create job
                 job_id = str(uuid.uuid4())
@@ -317,7 +365,8 @@ def batch_separate():
                     'progress': 0,
                     'created_at': datetime.now().isoformat(),
                     'instruments': instruments,
-                    'filename': file.filename
+                    'filename': file.filename,
+                    'temp_dir': temp_dir  # Store temp dir for cleanup
                 }
 
                 # Start background thread

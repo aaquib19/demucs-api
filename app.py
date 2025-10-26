@@ -21,10 +21,25 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
+
+
+# --- STARTUP LOGIC ---
+# Load the model ONCE when the application starts.
+print("Application starting: Downloading and loading model...")
+MODEL_NAME = os.getenv("MODEL_NAME", "htdemucs") # Good practice to use env vars
+try:
+    model = get_model(MODEL_NAME)
+    print("✅ Model loaded successfully and is ready!")
+except Exception as e:
+    print(f"❌ FATAL: Could not load model on startup. Error: {e}")
+    model = None # Set to None if loading fails
+# --- END STARTUP LOGIC ---
+
+
+
 app.config['MAX_CONTENT_LENGTH'] = int(os.getenv('MAX_FILE_SIZE', 100 * 1024 * 1024))
 
 # Global model variable
-model = None
 device = None
 model_sample_rate = None
 
@@ -212,8 +227,9 @@ def separate():
     Returns job ID for polling
     """
     try:
-        if not load_model():
-            return jsonify({'error': 'Model failed to load'}), 503
+      # Now, the model is already loaded. We just need to check if it's available.
+        if model is None:
+            return jsonify({"error": "Model is not available. The server may have failed to start correctly."}), 503 # 503 Service Unavailable is a good status code here
 
         if 'file' not in request.files:
             return jsonify({'error': 'No file provided'}), 400

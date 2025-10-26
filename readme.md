@@ -1,3 +1,6 @@
+just use docker : docker-compose up
+otherwise if no docker use below : 
+
 # Create virtual environment
 python -m venv venv
 
@@ -17,7 +20,7 @@ run command
 PORT=5002 USE_GPU=false python app.py
 
 
-
+Please remember that processing may take some time, so please wait3-5 min
 go to the directory in which you have the file, 
 then execute the below command : 
 curl -X POST -F "file=@test.mp3" -F "instruments=vocals,drums,bass,other" http://127.0.0.1:5001/separate

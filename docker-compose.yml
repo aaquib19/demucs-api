@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:                 # 1. Define the list of containers (services)
+  demucs-api:             # 2. The name of our service
+    build: .              # 3. Look for a 'Dockerfile' in the current directory (.) to build the image
+    ports:                # 4. Port mapping
+      - "5002:5000"       #    Map port 5002 on your Mac to port 5000 inside the container
+    environment:          # 5. Set environment variables inside the container
+      - PORT=5000
+      - USE_GPU=false
+      - MODEL_NAME=htdemucs
+    volumes:              # 6. Data persistence
+      - demucs_data:/tmp  #    Create a named volume 'demucs_data' and link it to the /tmp folder inside the container
+
+volumes:                  # 7. Declare the named volume
+  demucs_data:

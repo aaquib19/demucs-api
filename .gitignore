@@ -261,8 +261,6 @@ QUICKSTART.md
 test_api.sh
 test_client.py
 
-# Docker compose (keeping Dockerfile)
-docker-compose.yml
 
 # Environment example
 .env.example

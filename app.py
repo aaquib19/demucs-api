@@ -73,28 +73,6 @@ def get_device():
             return 'mps'
         return 'cpu'
 
-def load_model():
-    """Lazy load model on first request"""
-    global model, device, model_sample_rate
-    if model is None:
-        try:
-            print(f"Loading model '{MODEL_NAME}'...")
-            device = get_device()
-            print(f"Using device: {device}")
-
-            model = get_model(MODEL_NAME)
-            model = model.to(device)
-            model.eval()  # Set to evaluation mode
-
-            # Get model's native sample rate
-            model_sample_rate = model.samplerate
-            print(f"✓ Model loaded on {device} (sample rate: {model_sample_rate}Hz)")
-            return True
-        except Exception as e:
-            print(f"✗ Error loading model: {e}")
-            traceback.print_exc()
-            return False
-    return True
 
 def cleanup_old_jobs():
     """Clean up old completed/failed jobs and their files"""
@@ -322,92 +300,6 @@ def download(job_id):
         as_attachment=True,
         download_name='separated_stems.zip'
     )
-
-@app.route('/batch-separate', methods=['POST'])
-def batch_separate():
-    """
-    Start batch audio separation for multiple files
-    Returns list of job IDs for polling
-    """
-    try:
-        if not load_model():
-            return jsonify({'error': 'Model failed to load'}), 503
-
-        if 'files' not in request.files:
-            return jsonify({'error': 'No files provided'}), 400
-
-        files = request.files.getlist('files')
-        if not files or len(files) == 0:
-            return jsonify({'error': 'No files uploaded'}), 400
-
-        max_batch_size = int(os.getenv('MAX_BATCH_SIZE', 10))
-        if len(files) > max_batch_size:
-            return jsonify({'error': f'Maximum {max_batch_size} files allowed per batch'}), 400
-
-        instruments = request.form.get('instruments', 'vocals,drums,bass,other').split(',')
-        instruments = [i.strip().lower() for i in instruments]
-
-        valid_instruments = {'vocals', 'drums', 'bass', 'other'}
-        instruments = [i for i in instruments if i in valid_instruments]
-
-        if not instruments:
-            return jsonify({'error': 'No valid instruments requested'}), 400
-
-        job_ids = []
-        for file in files:
-            if file and file.filename != '':
-                # Create a more reliable temporary file
-                file_ext = os.path.splitext(file.filename)[1] or '.mp3'
-                temp_dir = tempfile.mkdtemp()
-                temp_input = os.path.join(temp_dir, f"{uuid.uuid4()}{file_ext}")
-                
-                # Save the file with proper error handling
-                try:
-                    file.save(temp_input)
-                    # Verify the file was saved correctly
-                    if not os.path.exists(temp_input) or os.path.getsize(temp_input) == 0:
-                        raise ValueError("Failed to save uploaded file")
-                except Exception as e:
-                    # Clean up if save failed
-                    if os.path.exists(temp_input):
-                        os.unlink(temp_input)
-                    os.rmdir(temp_dir)
-                    return jsonify({'error': f'Failed to save uploaded file: {str(e)}'}), 500
-
-                # Create job
-                job_id = str(uuid.uuid4())
-                processing_jobs[job_id] = {
-                    'status': 'queued',
-                    'progress': 0,
-                    'created_at': datetime.now().isoformat(),
-                    'instruments': instruments,
-                    'filename': file.filename,
-                    'temp_dir': temp_dir  # Store temp dir for cleanup
-                }
-
-                # Start background thread
-                thread = threading.Thread(
-                    target=process_audio,
-                    args=(job_id, temp_input, instruments),
-                    daemon=True
-                )
-                thread.start()
-
-                job_ids.append({
-                    'job_id': job_id,
-                    'filename': file.filename,
-                    'status': 'queued'
-                })
-
-        return jsonify({
-            'jobs': job_ids,
-            'message': f'Batch processing started for {len(job_ids)} files'
-        }), 202
-
-    except Exception as e:
-        print(f"Batch error: {e}")
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     # Start cleanup thread

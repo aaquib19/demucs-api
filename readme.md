@@ -1,6 +1,8 @@
 just use docker : docker-compose up
 otherwise if no docker use below : 
 
+##note, i was not able to host it because model takes alot of ram and server was running out of free tier out of memory 
+
 # Create virtual environment
 python -m venv venv
 

@@ -13,7 +13,8 @@ pip install -r requirements.txt
 # When done working:
 deactivate
 
-runcommand PORT=5002 python app.py
+run command 
+PORT=5002 USE_GPU=false python app.py
 
 
 
